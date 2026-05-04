@@ -5,6 +5,7 @@ dependencyResolutionManagement {
         mavenCentral()
         @Suppress("JcenterRepositoryObsolete") jcenter()
         maven("https://jitpack.io")
+        maven("https://api.xposed.info/")
     }
 }
 include(":app")

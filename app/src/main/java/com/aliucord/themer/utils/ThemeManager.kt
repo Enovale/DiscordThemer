@@ -23,12 +23,12 @@ object ThemeManager {
         init {
             try {
                 json = JSONObject(JSONTokener(file.readText()))
-                if (json.has("manifest")) json = json.getJSONObject("manifest")
-                if (json.has("name")) name = json.getString("name")
-                if (json.has("author")) author = json.getString("author")
-                if (json.has("version")) version = json.getString("version")
-                // if (json.has("license")) license = json.getString("license")
-                // if (json.has("updater")) updaterUrl = json.getString("updater")
+                val manifest = if (json.has("manifest")) json.getJSONObject("manifest") else null
+                if (manifest?.has("name") == true) name = manifest.getString("name")
+                if (manifest?.has("author") == true) author = manifest.getString("author")
+                if (manifest?.has("version") == true) version = manifest.getString("version")
+                // if (manifest?.has("license") == true) license = manifest.getString("license")
+                // if (manifest?.has("updater") == true) updaterUrl = manifest.getString("updater")
             } catch (e: Throwable) {
                 json = JSONObject()
                 failed = true
@@ -89,6 +89,7 @@ object ThemeManager {
                 ?.map { Theme(it) }
                 ?.filter { !it.failed } ?: emptyList()
         )
+        Log.d("DiscordThemer", "$themes")
         hsThemes?.value = themes
     }
 }

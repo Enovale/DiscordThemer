@@ -1,20 +1,27 @@
 package com.aliucord.themer.module
 
 import android.annotation.SuppressLint
+import android.app.AndroidAppHelper
+import android.app.Application
 import android.content.Context
 import android.content.res.XResources
 import android.content.res.XResources.DrawableLoader
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.util.Log
 import android.view.Window
 import androidx.core.graphics.ColorUtils
 import com.aliucord.themer.*
+import com.aliucord.themer.module.Utils.context
+import com.aliucord.themer.module.Utils.parseColor
 import com.aliucord.themer.preferences.disabledPref
 import com.aliucord.themer.preferences.sharedPreferences
 import com.aliucord.themer.utils.ThemeManager
 import de.robv.android.xposed.*
 import de.robv.android.xposed.callbacks.XC_InitPackageResources
 import de.robv.android.xposed.callbacks.XC_LoadPackage
+import org.json.JSONObject
+
 
 @SuppressLint("UseCompatLoadingForDrawables")
 class Main : IXposedHookInitPackageResources, IXposedHookLoadPackage {
@@ -32,53 +39,96 @@ class Main : IXposedHookInitPackageResources, IXposedHookLoadPackage {
         if (theme.advanced && disabledPref.get()) return
 
         val json = theme.json
-        if (json.has(Constants.MENTION_HIGHLIGHT))
-            res.setReplacement(packageName, "color", "status_yellow_500", ColorUtils.setAlphaComponent(json.getInt("mention_highlight"), 0xFF))
 
-        if (theme.advanced) {
-            if (json.has("color_brand_500")) res.fixNitroIcon(packageName, json.getInt("color_brand_500"))
-            if (json.has(Constants.ACTIVE_CHANNEL_COLOR)) res.tintActiveChannel(packageName, json.getInt(Constants.ACTIVE_CHANNEL_COLOR))
-            for (key in json.keys()) {
-                if (key.startsWith("color_")) {
-                    try {
-                        res.setReplacement(packageName, "color", key.substring(6), json.get(key))
-                    } catch (e: Throwable) {
-                        logError(e)
-                    }
-                } else if (key.startsWith("drawablecolor_")) {
-                    try {
-                        res.tintDrawable(packageName, key.substring(14), json.getInt(key))
-                    } catch (e: Throwable) {
-                        logError(e)
-                    }
+        // Replacing can't happen until a context is available, for system colors.
+        XposedHelpers.findAndHookMethod(
+            Application::class.java,
+            "onCreate",
+            object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    context = param.thisObject as Context
+
+                    replaceAll(json, res, packageName)
                 }
             }
-        } else {
-            Log.d(BuildConfig.TAG, "${theme.name} simple")
-            if (json.has(Constants.SIMPLE_ACCENT_COLOR)) {
-                val accent = json.getInt(Constants.SIMPLE_ACCENT_COLOR)
-                res.replaceAllColors(packageName, Constants.ACCENT_NAMES, accent)
-                res.fixNitroIcon(packageName, accent)
-            }
-            if (json.has(Constants.SIMPLE_BG_COLOR))
-                res.replaceAllColors(packageName, Constants.BACKGROUND_NAMES, json.getInt(Constants.SIMPLE_BG_COLOR))
-            if (json.has(Constants.SIMPLE_BG_SECONDARY_COLOR)) {
-                val color = json.getInt(Constants.SIMPLE_BG_SECONDARY_COLOR)
-                res.replaceAllColors(packageName, Constants.BACKGROUND_SECONDARY_NAMES, color)
-                res.tintActiveChannel(packageName, color)
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val getColor = Context::class.java.getDeclaredMethod("getColor", Int::class.javaPrimitiveType)
+            XposedBridge.hookMethod(getColor, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) =
+                    with(param.thisObject as Context) { param.result = resources.getColor(param.args[0] as Int, getTheme()) }
+            })
+        }
+    }
+
+    private fun replaceAll(
+        json: JSONObject,
+        res: XResources,
+        packageName: String
+    ) {
+        json.optJSONObject("simple_colors")?.run {
+            keys().forEach {
+                val v = parseColor(this.getString(it))
+                when (it) {
+                    "accent" -> {
+                        res.replaceAllColors(packageName, Constants.ACCENT_NAMES, v)
+                        res.fixNitroIcon(packageName, v)
+                        res.tintDrawable(packageName, "drawable_voice_indicator_speaking", v)
+                    }
+
+                    "background" -> {
+                        res.replaceAllColors(packageName, Constants.BACKGROUND_NAMES, v)
+                        res.replaceAllAttrs(packageName, Constants.BACKGROUND_ATTRS, v)
+                    }
+
+                    "background_secondary" -> {
+                        res.replaceAllColors(packageName, Constants.BACKGROUND_SECONDARY_NAMES, v)
+                        res.replaceAllAttrs(packageName, Constants.BACKGROUND_SECONDARY_ATTRS, v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_selected_dark", v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_selected_light", v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_active_dark", v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_active_light", v)
+                    }
+
+                    "mention_highlight" -> {
+                        res.trySetReplacement(packageName, "color", "status_yellow_500", ColorUtils.setAlphaComponent(v, 0xff))
+                        res.trySetReplacement(packageName, "attr", "status_yellow_500", ColorUtils.setAlphaComponent(v, 0xff))
+                    }
+
+                    "active_channel" -> {
+                        res.tintDrawable(packageName, "drawable_overlay_channels_selected_dark", v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_selected_light", v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_active_dark", v)
+                        res.tintDrawable(packageName, "drawable_overlay_channels_active_light", v)
+                        res.trySetReplacement(packageName, "color", it, v)
+                    }
+
+                    "statusbar", "input_background", "blocked_bg" -> res.trySetReplacement(packageName, "color", it, v)
+                }
             }
         }
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val getColor = Context::class.java.getDeclaredMethod("getColor", Int::class.javaPrimitiveType)
-                XposedBridge.hookMethod(getColor, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) =
-                        with(param.thisObject as Context) { param.result = resources.getColor(param.args[0] as Int, getTheme()) }
-                })
+        json.optJSONObject("colors")?.run {
+            if (has("brand_500"))
+                res.fixNitroIcon(packageName, parseColor(this.getString("brand_500")))
+            keys().forEach { key ->
+                val v = parseColor(this.getString(key))
+                res.trySetReplacement(packageName, "color", key, v)
+                res.trySetReplacement(packageName, "attr", key, v)
             }
+        }
 
-            AttrsReplacer(res, packageName, theme.advanced, json).replaceAttrs()
+        json.optJSONObject("drawable_tints")?.run {
+            keys().forEach {
+                res.tintDrawable(packageName, it, parseColor(this.getString(it)))
+            }
+        }
+    }
+
+    private fun XResources.trySetReplacement(packageName: String, type: String, name: String, color: Int) {
+        try {
+            setReplacement(packageName, type, name, color)
         } catch (e: Throwable) {
             logError(e)
         }
@@ -92,6 +142,14 @@ class Main : IXposedHookInitPackageResources, IXposedHookLoadPackage {
         }
     }
 
+    private fun XResources.replaceAllAttrs(packageName: String, attrs: Array<String>, color: Int) {
+        for (name in attrs) try {
+            setReplacement(packageName, "attr", name, color)
+        } catch (e: Throwable) {
+            logError(e)
+        }
+    }
+
     private fun XResources.fixNitroIcon(packageName: String, color: Int) =
         tintDrawable(packageName, "ic_nitro_rep", color)
 
@@ -100,11 +158,11 @@ class Main : IXposedHookInitPackageResources, IXposedHookLoadPackage {
         tintDrawable(packageName, "drawable_overlay_channels_active_light", color)
     }
 
-    private fun XResources.tintDrawable(packageName: String, drawable: String, color: Int) =
+    private fun XResources.tintDrawable(packageName: String, drawable: String, color: Int) {
         setReplacement(packageName, "drawable", drawable, object : DrawableLoader() {
-            override fun newDrawable(res: XResources, id: Int) =
-                getDrawable(getIdentifier(drawable, "drawable", packageName), null).apply { setTint(color) }
+            override fun newDrawable(res: XResources, id: Int): Drawable? = res.getDrawable(id, null).apply { setTint(color) }
         })
+    }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         val cl = lpparam.classLoader
